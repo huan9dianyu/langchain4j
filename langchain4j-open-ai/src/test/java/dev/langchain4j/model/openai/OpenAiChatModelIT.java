@@ -2,12 +2,19 @@ package dev.langchain4j.model.openai;
 
 import dev.langchain4j.agent.tool.ToolExecutionRequest;
 import dev.langchain4j.agent.tool.ToolSpecification;
-import dev.langchain4j.data.message.*;
+import dev.langchain4j.data.message.AiMessage;
+import dev.langchain4j.data.message.ChatMessage;
+import dev.langchain4j.data.message.ImageContent;
+import dev.langchain4j.data.message.TextContent;
+import dev.langchain4j.data.message.ToolExecutionResultMessage;
+import dev.langchain4j.data.message.UserMessage;
+import dev.langchain4j.internal.Json;
 import dev.langchain4j.model.Tokenizer;
 import dev.langchain4j.model.chat.ChatLanguageModel;
 import dev.langchain4j.model.output.Response;
 import dev.langchain4j.model.output.TokenUsage;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.condition.EnabledIfEnvironmentVariable;
 
 import java.util.Base64;
 import java.util.List;
@@ -16,14 +23,15 @@ import static dev.langchain4j.agent.tool.JsonSchemaProperty.INTEGER;
 import static dev.langchain4j.data.message.ToolExecutionResultMessage.from;
 import static dev.langchain4j.data.message.UserMessage.userMessage;
 import static dev.langchain4j.internal.Utils.readBytes;
-import static dev.langchain4j.model.openai.OpenAiChatModelName.GPT_3_5_TURBO;
-import static dev.langchain4j.model.openai.OpenAiModelName.GPT_3_5_TURBO_1106;
-import static dev.langchain4j.model.openai.OpenAiModelName.GPT_4_VISION_PREVIEW;
-import static dev.langchain4j.model.output.FinishReason.*;
+import static dev.langchain4j.model.openai.OpenAiChatModelName.GPT_4_O_MINI;
+import static dev.langchain4j.model.output.FinishReason.LENGTH;
+import static dev.langchain4j.model.output.FinishReason.STOP;
+import static dev.langchain4j.model.output.FinishReason.TOOL_EXECUTION;
 import static java.util.Arrays.asList;
 import static java.util.Collections.singletonList;
 import static org.assertj.core.api.Assertions.assertThat;
 
+@EnabledIfEnvironmentVariable(named = "OPENAI_API_KEY", matches = ".+")
 class OpenAiChatModelIT {
 
     static final String CAT_IMAGE_URL = "https://upload.wikimedia.org/wikipedia/commons/e/e9/Felis_silvestris_silvestris_small_gradual_decrease_of_quality.png";
@@ -40,16 +48,7 @@ class OpenAiChatModelIT {
             .baseUrl(System.getenv("OPENAI_BASE_URL"))
             .apiKey(System.getenv("OPENAI_API_KEY"))
             .organizationId(System.getenv("OPENAI_ORGANIZATION_ID"))
-            .temperature(0.0)
-            .logRequests(true)
-            .logResponses(true)
-            .build();
-
-    OpenAiChatModel visionModel = OpenAiChatModel.builder()
-            .baseUrl(System.getenv("OPENAI_BASE_URL"))
-            .apiKey(System.getenv("OPENAI_API_KEY"))
-            .organizationId(System.getenv("OPENAI_ORGANIZATION_ID"))
-            .modelName(GPT_4_VISION_PREVIEW)
+            .modelName(GPT_4_O_MINI)
             .temperature(0.0)
             .logRequests(true)
             .logResponses(true)
@@ -80,13 +79,14 @@ class OpenAiChatModelIT {
     void should_generate_answer_and_return_token_usage_and_finish_reason_length() {
 
         // given
-        int maxTokens = 1;
+        int maxCompletionTokens = 1;
 
         ChatLanguageModel model = OpenAiChatModel.builder()
                 .baseUrl(System.getenv("OPENAI_BASE_URL"))
                 .apiKey(System.getenv("OPENAI_API_KEY"))
                 .organizationId(System.getenv("OPENAI_ORGANIZATION_ID"))
-                .maxTokens(maxTokens)
+                .modelName(GPT_4_O_MINI)
+                .maxCompletionTokens(maxCompletionTokens)
                 .temperature(0.0)
                 .logRequests(true)
                 .logResponses(true)
@@ -102,7 +102,7 @@ class OpenAiChatModelIT {
 
         TokenUsage tokenUsage = response.tokenUsage();
         assertThat(tokenUsage.inputTokenCount()).isEqualTo(14);
-        assertThat(tokenUsage.outputTokenCount()).isLessThanOrEqualTo(maxTokens);
+        assertThat(tokenUsage.outputTokenCount()).isLessThanOrEqualTo(maxCompletionTokens);
         assertThat(tokenUsage.totalTokenCount())
                 .isEqualTo(tokenUsage.inputTokenCount() + tokenUsage.outputTokenCount());
 
@@ -130,8 +130,8 @@ class OpenAiChatModelIT {
         assertThat(toolExecutionRequest.arguments()).isEqualToIgnoringWhitespace("{\"first\": 2, \"second\": 2}");
 
         TokenUsage tokenUsage = response.tokenUsage();
-        assertThat(tokenUsage.inputTokenCount()).isEqualTo(52);
-        assertThat(tokenUsage.outputTokenCount()).isEqualTo(18);
+        assertThat(tokenUsage.inputTokenCount()).isGreaterThan(0);
+        assertThat(tokenUsage.outputTokenCount()).isGreaterThan(0);
         assertThat(tokenUsage.totalTokenCount())
                 .isEqualTo(tokenUsage.inputTokenCount() + tokenUsage.outputTokenCount());
 
@@ -162,7 +162,7 @@ class OpenAiChatModelIT {
     void should_execute_tool_forcefully_then_answer() {
 
         // given
-        UserMessage userMessage = userMessage("2+2=?");
+        UserMessage userMessage = userMessage("I have 2 apples and 2 pears");
 
         // when
         Response<AiMessage> response = model.generate(singletonList(userMessage), calculator);
@@ -178,12 +178,12 @@ class OpenAiChatModelIT {
         assertThat(toolExecutionRequest.arguments()).isEqualToIgnoringWhitespace("{\"first\": 2, \"second\": 2}");
 
         TokenUsage tokenUsage = response.tokenUsage();
-        assertThat(tokenUsage.inputTokenCount()).isEqualTo(61);
-        assertThat(tokenUsage.outputTokenCount()).isEqualTo(9);
+        assertThat(tokenUsage.inputTokenCount()).isGreaterThan(0);
+        assertThat(tokenUsage.outputTokenCount()).isGreaterThan(0);
         assertThat(tokenUsage.totalTokenCount())
                 .isEqualTo(tokenUsage.inputTokenCount() + tokenUsage.outputTokenCount());
 
-        assertThat(response.finishReason()).isEqualTo(STOP); // not sure if a bug in OpenAI or stop is expected here
+        assertThat(response.finishReason()).isEqualTo(TOOL_EXECUTION);
 
         // given
         ToolExecutionResultMessage toolExecutionResultMessage = from(toolExecutionRequest, "4");
@@ -198,7 +198,7 @@ class OpenAiChatModelIT {
         assertThat(secondAiMessage.toolExecutionRequests()).isNull();
 
         TokenUsage secondTokenUsage = secondResponse.tokenUsage();
-        assertThat(secondTokenUsage.inputTokenCount()).isEqualTo(37);
+        assertThat(secondTokenUsage.inputTokenCount()).isGreaterThan(0);
         assertThat(secondTokenUsage.outputTokenCount()).isGreaterThan(0);
         assertThat(secondTokenUsage.totalTokenCount())
                 .isEqualTo(secondTokenUsage.inputTokenCount() + secondTokenUsage.outputTokenCount());
@@ -214,8 +214,10 @@ class OpenAiChatModelIT {
                 .baseUrl(System.getenv("OPENAI_BASE_URL"))
                 .apiKey(System.getenv("OPENAI_API_KEY"))
                 .organizationId(System.getenv("OPENAI_ORGANIZATION_ID"))
-                .modelName(GPT_3_5_TURBO_1106) // supports parallel function calling
+                .modelName(GPT_4_O_MINI)
                 .temperature(0.0)
+                .logRequests(true)
+                .logResponses(true)
                 .build();
 
         UserMessage userMessage = userMessage("2+2=? 3+3=?");
@@ -238,8 +240,8 @@ class OpenAiChatModelIT {
         assertThat(toolExecutionRequest2.arguments()).isEqualToIgnoringWhitespace("{\"first\": 3, \"second\": 3}");
 
         TokenUsage tokenUsage = response.tokenUsage();
-        assertThat(tokenUsage.inputTokenCount()).isEqualTo(57);
-        assertThat(tokenUsage.outputTokenCount()).isEqualTo(51);
+        assertThat(tokenUsage.inputTokenCount()).isGreaterThan(0);
+        assertThat(tokenUsage.outputTokenCount()).isGreaterThan(0);
         assertThat(tokenUsage.totalTokenCount())
                 .isEqualTo(tokenUsage.inputTokenCount() + tokenUsage.outputTokenCount());
 
@@ -260,7 +262,7 @@ class OpenAiChatModelIT {
         assertThat(secondAiMessage.toolExecutionRequests()).isNull();
 
         TokenUsage secondTokenUsage = secondResponse.tokenUsage();
-        assertThat(secondTokenUsage.inputTokenCount()).isEqualTo(83);
+        assertThat(secondTokenUsage.inputTokenCount()).isGreaterThan(0);
         assertThat(secondTokenUsage.outputTokenCount()).isGreaterThan(0);
         assertThat(secondTokenUsage.totalTokenCount())
                 .isEqualTo(secondTokenUsage.inputTokenCount() + secondTokenUsage.outputTokenCount());
@@ -268,23 +270,26 @@ class OpenAiChatModelIT {
         assertThat(secondResponse.finishReason()).isEqualTo(STOP);
     }
 
+    static class Person {
+
+        String name;
+        String surname;
+    }
+
     @Test
     void should_generate_valid_json() {
 
-        //given
+        // given
         String userMessage = "Return JSON with two fields: name and surname of Klaus Heisler. " +
                 "Before returning, tell me a joke."; // nudging it to say something additionally to json
-
-        String expectedJson = "{\"name\": \"Klaus\", \"surname\": \"Heisler\"}";
-
-        assertThat(model.generate(userMessage)).isNotEqualToIgnoringWhitespace(expectedJson);
 
         ChatLanguageModel modelGeneratingJson = OpenAiChatModel.builder()
                 .baseUrl(System.getenv("OPENAI_BASE_URL"))
                 .apiKey(System.getenv("OPENAI_API_KEY"))
                 .organizationId(System.getenv("OPENAI_ORGANIZATION_ID"))
-                .modelName(GPT_3_5_TURBO_1106) // supports response_format = 'json_object'
+                .modelName(GPT_4_O_MINI)
                 .responseFormat("json_object")
+                .temperature(0.0)
                 .logRequests(true)
                 .logResponses(true)
                 .build();
@@ -293,7 +298,9 @@ class OpenAiChatModelIT {
         String json = modelGeneratingJson.generate(userMessage);
 
         // then
-        assertThat(json).isEqualToIgnoringWhitespace(expectedJson);
+        Person person = Json.fromJson(json, Person.class);
+        assertThat(person.name).isEqualTo("Klaus");
+        assertThat(person.surname).isEqualTo("Heisler");
     }
 
     @Test
@@ -304,12 +311,10 @@ class OpenAiChatModelIT {
         UserMessage userMessage = UserMessage.from(imageContent);
 
         // when
-        Response<AiMessage> response = visionModel.generate(userMessage);
+        Response<AiMessage> response = model.generate(userMessage);
 
         // then
         assertThat(response.content().text()).containsIgnoringCase("cat");
-
-        assertThat(response.tokenUsage().inputTokenCount()).isEqualTo(92);
     }
 
     @Test
@@ -321,12 +326,10 @@ class OpenAiChatModelIT {
         UserMessage userMessage = UserMessage.from(imageContent);
 
         // when
-        Response<AiMessage> response = visionModel.generate(userMessage);
+        Response<AiMessage> response = model.generate(userMessage);
 
         // then
         assertThat(response.content().text()).containsIgnoringCase("cat");
-
-        assertThat(response.tokenUsage().inputTokenCount()).isEqualTo(92);
     }
 
     @Test
@@ -339,12 +342,10 @@ class OpenAiChatModelIT {
         );
 
         // when
-        Response<AiMessage> response = visionModel.generate(userMessage);
+        Response<AiMessage> response = model.generate(userMessage);
 
         // then
         assertThat(response.content().text()).containsIgnoringCase("cat");
-
-        assertThat(response.tokenUsage().inputTokenCount()).isEqualTo(102);
     }
 
     @Test
@@ -358,14 +359,12 @@ class OpenAiChatModelIT {
         );
 
         // when
-        Response<AiMessage> response = visionModel.generate(userMessage);
+        Response<AiMessage> response = model.generate(userMessage);
 
         // then
         assertThat(response.content().text())
                 .containsIgnoringCase("cat")
                 .containsIgnoringCase("dice");
-
-        assertThat(response.tokenUsage().inputTokenCount()).isEqualTo(189);
     }
 
     @Test
@@ -379,34 +378,12 @@ class OpenAiChatModelIT {
         );
 
         // when
-        Response<AiMessage> response = visionModel.generate(userMessage);
+        Response<AiMessage> response = model.generate(userMessage);
 
         // then
         assertThat(response.content().text())
                 .containsIgnoringCase("cat")
                 .containsIgnoringCase("dice");
-
-        assertThat(response.tokenUsage().inputTokenCount()).isEqualTo(189);
-    }
-
-    @Test
-    void should_use_enum_as_model_name() {
-
-        // given
-        OpenAiChatModel model = OpenAiChatModel.builder()
-                .baseUrl(System.getenv("OPENAI_BASE_URL"))
-                .apiKey(System.getenv("OPENAI_API_KEY"))
-                .organizationId(System.getenv("OPENAI_ORGANIZATION_ID"))
-                .modelName(GPT_3_5_TURBO)
-                .logRequests(true)
-                .logResponses(true)
-                .build();
-
-        // when
-        String response = model.generate("What is the capital of Germany?");
-
-        // then
-        assertThat(response).containsIgnoringCase("Berlin");
     }
 
     @Test

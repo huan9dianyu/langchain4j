@@ -1,5 +1,8 @@
 package dev.langchain4j.model.mistralai;
 
+import dev.langchain4j.model.mistralai.internal.api.MistralAiModelCard;
+import dev.langchain4j.model.mistralai.internal.api.MistralAiModelResponse;
+import dev.langchain4j.model.mistralai.internal.client.MistralAiClient;
 import dev.langchain4j.model.mistralai.spi.MistralAiModelsBuilderFactory;
 import dev.langchain4j.model.output.Response;
 import lombok.Builder;
@@ -9,7 +12,6 @@ import java.util.List;
 
 import static dev.langchain4j.internal.RetryUtils.withRetry;
 import static dev.langchain4j.internal.Utils.getOrDefault;
-import static dev.langchain4j.model.mistralai.DefaultMistralAiHelper.MISTRALAI_API_URL;
 import static dev.langchain4j.spi.ServiceHelper.loadFactories;
 
 /**
@@ -39,7 +41,7 @@ public class MistralAiModels {
                            Boolean logResponses,
                            Integer maxRetries) {
         this.client = MistralAiClient.builder()
-                .baseUrl(getOrDefault(baseUrl, MISTRALAI_API_URL))
+                .baseUrl(getOrDefault(baseUrl, "https://api.mistral.ai/v1"))
                 .apiKey(apiKey)
                 .timeout(getOrDefault(timeout, Duration.ofSeconds(60)))
                 .logRequests(getOrDefault(logRequests, false))
@@ -48,12 +50,6 @@ public class MistralAiModels {
         this.maxRetries = getOrDefault(maxRetries, 3);
     }
 
-    /**
-     * Creates a new instance of MistralAiModels with the specified API key.
-     *
-     * @param apiKey the API key for authentication
-     * @return a new instance of MistralAiModels
-     */
     public static MistralAiModels withApiKey(String apiKey) {
         return builder().apiKey(apiKey).build();
     }
@@ -77,7 +73,6 @@ public class MistralAiModels {
 
     public static class MistralAiModelsBuilder {
         public MistralAiModelsBuilder(){
-
         }
     }
 }

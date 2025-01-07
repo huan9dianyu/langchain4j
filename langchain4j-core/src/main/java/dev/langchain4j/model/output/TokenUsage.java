@@ -13,6 +13,7 @@ public class TokenUsage {
     private final Integer outputTokenCount;
     private final Integer totalTokenCount;
 
+
     /**
      * Creates a new {@link TokenUsage} instance with all fields set to null.
      */
@@ -77,6 +78,33 @@ public class TokenUsage {
      */
     public Integer totalTokenCount() {
         return totalTokenCount;
+    }
+
+    /**
+     * Adds two token usages.
+     * <br>
+     * If one of the token usages is null, the other is returned without changes.
+     * <br>
+     * Fields which are null in both responses will be null in the result.
+     *
+     * @param first The first token usage to add.
+     * @param second The second token usage to add.
+     * @return a new {@link TokenUsage} instance with the sum of token usages.
+     */
+    public static TokenUsage sum(TokenUsage first, TokenUsage second) {
+        if (first == null) {
+            return second;
+        }
+
+        if (second == null) {
+            return first;
+        }
+
+        return new TokenUsage(
+                sum(first.inputTokenCount, second.inputTokenCount),
+                sum(first.outputTokenCount, second.outputTokenCount),
+                sum(first.totalTokenCount, second.totalTokenCount)
+        );
     }
 
     /**

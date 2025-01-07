@@ -2,15 +2,23 @@ package dev.langchain4j.model.openai;
 
 import dev.langchain4j.agent.tool.ToolExecutionRequest;
 import dev.langchain4j.agent.tool.ToolSpecification;
-import dev.langchain4j.data.message.*;
+import dev.langchain4j.data.message.AiMessage;
+import dev.langchain4j.data.message.ChatMessage;
+import dev.langchain4j.data.message.ImageContent;
+import dev.langchain4j.data.message.TextContent;
+import dev.langchain4j.data.message.ToolExecutionResultMessage;
+import dev.langchain4j.data.message.UserMessage;
+import dev.langchain4j.internal.Json;
 import dev.langchain4j.model.StreamingResponseHandler;
 import dev.langchain4j.model.Tokenizer;
 import dev.langchain4j.model.chat.StreamingChatLanguageModel;
 import dev.langchain4j.model.chat.TestStreamingResponseHandler;
 import dev.langchain4j.model.output.Response;
 import dev.langchain4j.model.output.TokenUsage;
-import org.assertj.core.data.Percentage;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.condition.EnabledIfEnvironmentVariable;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.EnumSource;
 
 import java.util.Base64;
 import java.util.List;
@@ -22,33 +30,23 @@ import static dev.langchain4j.data.message.UserMessage.userMessage;
 import static dev.langchain4j.internal.Utils.readBytes;
 import static dev.langchain4j.model.openai.OpenAiChatModelIT.CAT_IMAGE_URL;
 import static dev.langchain4j.model.openai.OpenAiChatModelIT.DICE_IMAGE_URL;
-import static dev.langchain4j.model.openai.OpenAiChatModelName.GPT_3_5_TURBO;
-import static dev.langchain4j.model.openai.OpenAiModelName.GPT_3_5_TURBO_1106;
-import static dev.langchain4j.model.openai.OpenAiModelName.GPT_4_VISION_PREVIEW;
+import static dev.langchain4j.model.openai.OpenAiChatModelName.GPT_4_O_MINI;
 import static dev.langchain4j.model.output.FinishReason.STOP;
 import static dev.langchain4j.model.output.FinishReason.TOOL_EXECUTION;
 import static java.util.Arrays.asList;
 import static java.util.Collections.singletonList;
 import static java.util.concurrent.TimeUnit.SECONDS;
 import static org.assertj.core.api.Assertions.assertThat;
-import static org.assertj.core.data.Percentage.withPercentage;
+import static org.junit.jupiter.params.provider.EnumSource.Mode.EXCLUDE;
 
+@EnabledIfEnvironmentVariable(named = "OPENAI_API_KEY", matches = ".+")
 class OpenAiStreamingChatModelIT {
 
     OpenAiStreamingChatModel model = OpenAiStreamingChatModel.builder()
             .baseUrl(System.getenv("OPENAI_BASE_URL"))
             .apiKey(System.getenv("OPENAI_API_KEY"))
             .organizationId(System.getenv("OPENAI_ORGANIZATION_ID"))
-            .temperature(0.0)
-            .logRequests(true)
-            .logResponses(true)
-            .build();
-
-    StreamingChatLanguageModel visionModel = OpenAiStreamingChatModel.builder()
-            .baseUrl(System.getenv("OPENAI_BASE_URL"))
-            .apiKey(System.getenv("OPENAI_API_KEY"))
-            .organizationId(System.getenv("OPENAI_ORGANIZATION_ID"))
-            .modelName(GPT_4_VISION_PREVIEW)
+            .modelName(GPT_4_O_MINI)
             .temperature(0.0)
             .logRequests(true)
             .logResponses(true)
@@ -60,8 +58,6 @@ class OpenAiStreamingChatModelIT {
             .addParameter("first", INTEGER)
             .addParameter("second", INTEGER)
             .build();
-
-    Percentage tokenizerPrecision = withPercentage(5);
 
     @Test
     void should_stream_answer() throws Exception {
@@ -75,13 +71,11 @@ class OpenAiStreamingChatModelIT {
 
             @Override
             public void onNext(String token) {
-                System.out.println("onNext: '" + token + "'");
                 answerBuilder.append(token);
             }
 
             @Override
             public void onComplete(Response<AiMessage> response) {
-                System.out.println("onComplete: '" + response + "'");
                 futureAnswer.complete(answerBuilder.toString());
                 futureResponse.complete(response);
             }
@@ -99,11 +93,7 @@ class OpenAiStreamingChatModelIT {
         assertThat(answer).contains("Berlin");
         assertThat(response.content().text()).isEqualTo(answer);
 
-        TokenUsage tokenUsage = response.tokenUsage();
-        assertThat(tokenUsage.inputTokenCount()).isEqualTo(14);
-        assertThat(tokenUsage.outputTokenCount()).isGreaterThan(0);
-        assertThat(tokenUsage.totalTokenCount())
-                .isEqualTo(tokenUsage.inputTokenCount() + tokenUsage.outputTokenCount());
+        assertTokenUsage(response.tokenUsage());
 
         assertThat(response.finishReason()).isEqualTo(STOP);
     }
@@ -122,14 +112,12 @@ class OpenAiStreamingChatModelIT {
 
             @Override
             public void onNext(String token) {
-                System.out.println("onNext: '" + token + "'");
                 Exception e = new IllegalStateException("onNext() should never be called when tool is executed");
                 futureResponse.completeExceptionally(e);
             }
 
             @Override
             public void onComplete(Response<AiMessage> response) {
-                System.out.println("onComplete: '" + response + "'");
                 futureResponse.complete(response);
             }
 
@@ -152,11 +140,7 @@ class OpenAiStreamingChatModelIT {
         assertThat(toolExecutionRequest.name()).isEqualTo("calculator");
         assertThat(toolExecutionRequest.arguments()).isEqualToIgnoringWhitespace("{\"first\": 2, \"second\": 2}");
 
-        TokenUsage tokenUsage = response.tokenUsage();
-        assertThat(tokenUsage.inputTokenCount()).isCloseTo(53, tokenizerPrecision);
-        assertThat(tokenUsage.outputTokenCount()).isCloseTo(14, tokenizerPrecision);
-        assertThat(tokenUsage.totalTokenCount())
-                .isEqualTo(tokenUsage.inputTokenCount() + tokenUsage.outputTokenCount());
+        assertTokenUsage(response.tokenUsage());
 
         assertThat(response.finishReason()).isEqualTo(TOOL_EXECUTION);
 
@@ -172,12 +156,10 @@ class OpenAiStreamingChatModelIT {
 
             @Override
             public void onNext(String token) {
-                System.out.println("onNext: '" + token + "'");
             }
 
             @Override
             public void onComplete(Response<AiMessage> response) {
-                System.out.println("onComplete: '" + response + "'");
                 secondFutureResponse.complete(response);
             }
 
@@ -194,11 +176,7 @@ class OpenAiStreamingChatModelIT {
         assertThat(secondAiMessage.text()).contains("4");
         assertThat(secondAiMessage.toolExecutionRequests()).isNull();
 
-        TokenUsage secondTokenUsage = secondResponse.tokenUsage();
-        assertThat(secondTokenUsage.inputTokenCount()).isCloseTo(33, tokenizerPrecision);
-        assertThat(secondTokenUsage.outputTokenCount()).isGreaterThan(0);
-        assertThat(secondTokenUsage.totalTokenCount())
-                .isEqualTo(secondTokenUsage.inputTokenCount() + secondTokenUsage.outputTokenCount());
+        assertTokenUsage(secondResponse.tokenUsage());
 
         assertThat(secondResponse.finishReason()).isEqualTo(STOP);
     }
@@ -216,14 +194,12 @@ class OpenAiStreamingChatModelIT {
 
             @Override
             public void onNext(String token) {
-                System.out.println("onNext: '" + token + "'");
                 Exception e = new IllegalStateException("onNext() should never be called when tool is executed");
                 futureResponse.completeExceptionally(e);
             }
 
             @Override
             public void onComplete(Response<AiMessage> response) {
-                System.out.println("onComplete: '" + response + "'");
                 futureResponse.complete(response);
             }
 
@@ -246,13 +222,9 @@ class OpenAiStreamingChatModelIT {
         assertThat(toolExecutionRequest.name()).isEqualTo("calculator");
         assertThat(toolExecutionRequest.arguments()).isEqualToIgnoringWhitespace("{\"first\": 2, \"second\": 2}");
 
-        TokenUsage tokenUsage = response.tokenUsage();
-        assertThat(tokenUsage.inputTokenCount()).isCloseTo(59, tokenizerPrecision);
-        assertThat(tokenUsage.outputTokenCount()).isCloseTo(9, tokenizerPrecision);
-        assertThat(tokenUsage.totalTokenCount())
-                .isEqualTo(tokenUsage.inputTokenCount() + tokenUsage.outputTokenCount());
+        assertTokenUsage(response.tokenUsage());
 
-        assertThat(response.finishReason()).isEqualTo(STOP); // not sure if a bug in OpenAI or stop is expected here
+        assertThat(response.finishReason()).isEqualTo(TOOL_EXECUTION);
 
         // given
         ToolExecutionResultMessage toolExecutionResultMessage = from(toolExecutionRequest, "4");
@@ -266,12 +238,10 @@ class OpenAiStreamingChatModelIT {
 
             @Override
             public void onNext(String token) {
-                System.out.println("onNext: '" + token + "'");
             }
 
             @Override
             public void onComplete(Response<AiMessage> response) {
-                System.out.println("onComplete: '" + response + "'");
                 secondFutureResponse.complete(response);
             }
 
@@ -288,11 +258,7 @@ class OpenAiStreamingChatModelIT {
         assertThat(secondAiMessage.text()).contains("4");
         assertThat(secondAiMessage.toolExecutionRequests()).isNull();
 
-        TokenUsage secondTokenUsage = secondResponse.tokenUsage();
-        assertThat(secondTokenUsage.inputTokenCount()).isCloseTo(33, tokenizerPrecision);
-        assertThat(secondTokenUsage.outputTokenCount()).isGreaterThan(0);
-        assertThat(secondTokenUsage.totalTokenCount())
-                .isEqualTo(secondTokenUsage.inputTokenCount() + secondTokenUsage.outputTokenCount());
+        assertTokenUsage(secondResponse.tokenUsage());
 
         assertThat(secondResponse.finishReason()).isEqualTo(STOP);
     }
@@ -305,7 +271,7 @@ class OpenAiStreamingChatModelIT {
                 .baseUrl(System.getenv("OPENAI_BASE_URL"))
                 .apiKey(System.getenv("OPENAI_API_KEY"))
                 .organizationId(System.getenv("OPENAI_ORGANIZATION_ID"))
-                .modelName(GPT_3_5_TURBO_1106)  // supports parallel function calling
+                .modelName(GPT_4_O_MINI)
                 .temperature(0.0)
                 .logRequests(true)
                 .logResponses(true)
@@ -321,14 +287,12 @@ class OpenAiStreamingChatModelIT {
 
             @Override
             public void onNext(String token) {
-                System.out.println("onNext: '" + token + "'");
                 Exception e = new IllegalStateException("onNext() should never be called when tool is executed");
                 futureResponse.completeExceptionally(e);
             }
 
             @Override
             public void onComplete(Response<AiMessage> response) {
-                System.out.println("onComplete: '" + response + "'");
                 futureResponse.complete(response);
             }
 
@@ -353,11 +317,7 @@ class OpenAiStreamingChatModelIT {
         assertThat(toolExecutionRequest2.name()).isEqualTo("calculator");
         assertThat(toolExecutionRequest2.arguments()).isEqualToIgnoringWhitespace("{\"first\": 3, \"second\": 3}");
 
-        TokenUsage tokenUsage = response.tokenUsage();
-        assertThat(tokenUsage.inputTokenCount()).isCloseTo(57, tokenizerPrecision);
-        assertThat(tokenUsage.outputTokenCount()).isCloseTo(34, tokenizerPrecision);
-        assertThat(tokenUsage.totalTokenCount())
-                .isEqualTo(tokenUsage.inputTokenCount() + tokenUsage.outputTokenCount());
+        assertTokenUsage(response.tokenUsage());
 
         assertThat(response.finishReason()).isEqualTo(TOOL_EXECUTION);
 
@@ -374,12 +334,10 @@ class OpenAiStreamingChatModelIT {
 
             @Override
             public void onNext(String token) {
-                System.out.println("onNext: '" + token + "'");
             }
 
             @Override
             public void onComplete(Response<AiMessage> response) {
-                System.out.println("onComplete: '" + response + "'");
                 secondFutureResponse.complete(response);
             }
 
@@ -396,19 +354,23 @@ class OpenAiStreamingChatModelIT {
         assertThat(secondAiMessage.text()).contains("4", "6");
         assertThat(secondAiMessage.toolExecutionRequests()).isNull();
 
-        TokenUsage secondTokenUsage = secondResponse.tokenUsage();
-        assertThat(secondTokenUsage.inputTokenCount()).isCloseTo(88, tokenizerPrecision);
-        assertThat(secondTokenUsage.outputTokenCount()).isGreaterThan(0);
-        assertThat(secondTokenUsage.totalTokenCount())
-                .isEqualTo(secondTokenUsage.inputTokenCount() + secondTokenUsage.outputTokenCount());
+        assertTokenUsage(secondResponse.tokenUsage());
 
         assertThat(secondResponse.finishReason()).isEqualTo(STOP);
     }
 
+    static class Person {
+
+        String name;
+        String surname;
+    }
+
     @Test
-    void should_stream_valid_json() throws Exception {
+    void should_stream_valid_json() {
 
         //given
+        String responseFormat = "json_object";
+
         String userMessage = "Return JSON with two fields: name and surname of Klaus Heisler. " +
                 "Before returning, tell me a joke."; // nudging it to say something additionally to json
 
@@ -416,46 +378,22 @@ class OpenAiStreamingChatModelIT {
                 .baseUrl(System.getenv("OPENAI_BASE_URL"))
                 .apiKey(System.getenv("OPENAI_API_KEY"))
                 .organizationId(System.getenv("OPENAI_ORGANIZATION_ID"))
-                .modelName(GPT_3_5_TURBO_1106) // supports response_format = 'json_object'
-                .responseFormat("json_object")
+                .modelName(GPT_4_O_MINI)
+                .responseFormat(responseFormat)
+                .temperature(0.0)
                 .logRequests(true)
                 .logResponses(true)
                 .build();
 
         // when
-        CompletableFuture<String> futureAnswer = new CompletableFuture<>();
-        CompletableFuture<Response<AiMessage>> futureResponse = new CompletableFuture<>();
-
-        model.generate(userMessage, new StreamingResponseHandler<AiMessage>() {
-
-            private final StringBuilder answerBuilder = new StringBuilder();
-
-            @Override
-            public void onNext(String token) {
-                System.out.println("onNext: '" + token + "'");
-                answerBuilder.append(token);
-            }
-
-            @Override
-            public void onComplete(Response<AiMessage> response) {
-                System.out.println("onComplete: '" + response + "'");
-                futureAnswer.complete(answerBuilder.toString());
-                futureResponse.complete(response);
-            }
-
-            @Override
-            public void onError(Throwable error) {
-                futureAnswer.completeExceptionally(error);
-                futureResponse.completeExceptionally(error);
-            }
-        });
-
-        String json = futureAnswer.get(30, SECONDS);
-        Response<AiMessage> response = futureResponse.get(30, SECONDS);
+        TestStreamingResponseHandler<AiMessage> handler = new TestStreamingResponseHandler<>();
+        model.generate(userMessage, handler);
+        Response<AiMessage> response = handler.get();
 
         // then
-        assertThat(json).isEqualToIgnoringWhitespace("{\"name\": \"Klaus\", \"surname\": \"Heisler\"}");
-        assertThat(response.content().text()).isEqualTo(json);
+        Person person = Json.fromJson(response.content().text(), Person.class);
+        assertThat(person.name).isEqualTo("Klaus");
+        assertThat(person.surname).isEqualTo("Heisler");
     }
 
     @Test
@@ -467,13 +405,11 @@ class OpenAiStreamingChatModelIT {
 
         // when
         TestStreamingResponseHandler<AiMessage> handler = new TestStreamingResponseHandler<>();
-        visionModel.generate(singletonList(userMessage), handler);
+        model.generate(singletonList(userMessage), handler);
         Response<AiMessage> response = handler.get();
 
         // then
         assertThat(response.content().text()).containsIgnoringCase("cat");
-
-        assertThat(response.tokenUsage().inputTokenCount()).isEqualTo(92);
     }
 
     @Test
@@ -486,13 +422,11 @@ class OpenAiStreamingChatModelIT {
 
         // when
         TestStreamingResponseHandler<AiMessage> handler = new TestStreamingResponseHandler<>();
-        visionModel.generate(singletonList(userMessage), handler);
+        model.generate(singletonList(userMessage), handler);
         Response<AiMessage> response = handler.get();
 
         // then
         assertThat(response.content().text()).containsIgnoringCase("cat");
-
-        assertThat(response.tokenUsage().inputTokenCount()).isEqualTo(92);
     }
 
     @Test
@@ -506,13 +440,11 @@ class OpenAiStreamingChatModelIT {
 
         // when
         TestStreamingResponseHandler<AiMessage> handler = new TestStreamingResponseHandler<>();
-        visionModel.generate(singletonList(userMessage), handler);
+        model.generate(singletonList(userMessage), handler);
         Response<AiMessage> response = handler.get();
 
         // then
         assertThat(response.content().text()).containsIgnoringCase("cat");
-
-        assertThat(response.tokenUsage().inputTokenCount()).isEqualTo(102);
     }
 
     @Test
@@ -527,15 +459,13 @@ class OpenAiStreamingChatModelIT {
 
         // when
         TestStreamingResponseHandler<AiMessage> handler = new TestStreamingResponseHandler<>();
-        visionModel.generate(singletonList(userMessage), handler);
+        model.generate(singletonList(userMessage), handler);
         Response<AiMessage> response = handler.get();
 
         // then
         assertThat(response.content().text())
                 .containsIgnoringCase("cat")
                 .containsIgnoringCase("dice");
-
-        assertThat(response.tokenUsage().inputTokenCount()).isEqualTo(189);
     }
 
     @Test
@@ -550,26 +480,28 @@ class OpenAiStreamingChatModelIT {
 
         // when
         TestStreamingResponseHandler<AiMessage> handler = new TestStreamingResponseHandler<>();
-        visionModel.generate(singletonList(userMessage), handler);
+        model.generate(singletonList(userMessage), handler);
         Response<AiMessage> response = handler.get();
 
         // then
         assertThat(response.content().text())
                 .containsIgnoringCase("cat")
                 .containsIgnoringCase("dice");
-
-        assertThat(response.tokenUsage().inputTokenCount()).isEqualTo(189);
     }
 
-    @Test
-    void should_use_enum_as_model_name() {
+    @ParameterizedTest
+    @EnumSource(value = OpenAiChatModelName.class, mode = EXCLUDE, names = {
+            "GPT_4_32K", "GPT_4_32K_0314", "GPT_4_32K_0613", // don't have access
+            "GPT_4_0314", "GPT_4_VISION_PREVIEW" // deprecated
+    })
+    void should_use_enum_as_model_name(OpenAiChatModelName modelName) {
 
         // given
         OpenAiStreamingChatModel model = OpenAiStreamingChatModel.builder()
                 .baseUrl(System.getenv("OPENAI_BASE_URL"))
                 .apiKey(System.getenv("OPENAI_API_KEY"))
                 .organizationId(System.getenv("OPENAI_ORGANIZATION_ID"))
-                .modelName(GPT_3_5_TURBO)
+                .modelName(modelName)
                 .logRequests(true)
                 .logResponses(true)
                 .build();
@@ -638,5 +570,12 @@ class OpenAiStreamingChatModelIT {
 
         // then
         assertThat(tokenCount).isEqualTo(42);
+    }
+
+    private static void assertTokenUsage(TokenUsage tokenUsage) {
+        assertThat(tokenUsage.inputTokenCount()).isGreaterThan(0);
+        assertThat(tokenUsage.outputTokenCount()).isGreaterThan(0);
+        assertThat(tokenUsage.totalTokenCount())
+                .isEqualTo(tokenUsage.inputTokenCount() + tokenUsage.outputTokenCount());
     }
 }

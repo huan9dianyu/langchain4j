@@ -11,10 +11,16 @@ import org.junit.jupiter.params.provider.ValueSource;
 import java.io.IOException;
 import java.io.InputStream;
 import java.net.URISyntaxException;
-import java.nio.file.*;
+import java.nio.file.FileSystems;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.nio.file.PathMatcher;
+import java.nio.file.Paths;
 import java.util.List;
 
-import static dev.langchain4j.data.document.loader.FileSystemDocumentLoader.*;
+import static dev.langchain4j.data.document.loader.FileSystemDocumentLoader.loadDocument;
+import static dev.langchain4j.data.document.loader.FileSystemDocumentLoader.loadDocuments;
+import static dev.langchain4j.data.document.loader.FileSystemDocumentLoader.loadDocumentsRecursively;
 import static java.util.stream.Collectors.toList;
 
 class FileSystemDocumentLoaderTest implements WithAssertions {
@@ -78,12 +84,13 @@ class FileSystemDocumentLoaderTest implements WithAssertions {
         // then
         List<String> fileNames = documents.stream()
                 .map(document -> document.metadata("file_name"))
-                .collect(toList());
+                .toList();
         assertThat(fileNames).containsExactlyInAnyOrder(
                 "miles-of-smiles-terms-of-use.txt",
                 "test-file.banana",
                 "test-file-iso-8859-1.txt",
-                "test-file-utf8.txt"
+                "test-file-utf8.txt",
+                "chefs-prompt-based-on-ingredients-in-root.txt"
         );
 
         // when-then
@@ -138,7 +145,7 @@ class FileSystemDocumentLoaderTest implements WithAssertions {
         // then
         List<String> fileNames = documents.stream()
                 .map(document -> document.metadata("file_name"))
-                .collect(toList());
+                .toList();
         assertThat(fileNames).containsExactlyInAnyOrder("test-file.banana");
 
         // when-then
@@ -161,7 +168,7 @@ class FileSystemDocumentLoaderTest implements WithAssertions {
         // then
         List<String> fileNames = documents.stream()
                 .map(document -> document.metadata("file_name"))
-                .collect(toList());
+                .toList();
         assertThat(fileNames).containsExactlyInAnyOrder(
                 "miles-of-smiles-terms-of-use.txt",
                 "test-file.banana",
@@ -169,6 +176,8 @@ class FileSystemDocumentLoaderTest implements WithAssertions {
                 "test-file-utf8.txt",
                 "chefs-prompt-based-on-ingredients.txt",
                 "chefs-prompt-system-message.txt",
+                "chefs-prompt-based-on-ingredients-in-root.txt",
+                "chefs-prompt-based-on-ingredients-in-subdirectory.txt",
                 "test-file-2.banana"
         );
 
@@ -193,7 +202,7 @@ class FileSystemDocumentLoaderTest implements WithAssertions {
         // then
         List<String> fileNames = documents.stream()
                 .map(document -> document.metadata("file_name"))
-                .collect(toList());
+                .toList();
         assertThat(fileNames).containsExactlyInAnyOrder("test-file.banana");
 
         // when-then
@@ -241,7 +250,7 @@ class FileSystemDocumentLoaderTest implements WithAssertions {
         // then
         List<String> fileNames = documents.stream()
                 .map(document -> document.metadata("file_name"))
-                .collect(toList());
+                .toList();
         assertThat(fileNames).containsExactlyInAnyOrder("test-file-2.banana");
 
         // when-then

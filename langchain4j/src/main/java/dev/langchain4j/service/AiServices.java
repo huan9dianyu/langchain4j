@@ -1,6 +1,5 @@
 package dev.langchain4j.service;
 
-import dev.langchain4j.agent.tool.DefaultToolExecutor;
 import dev.langchain4j.agent.tool.Tool;
 import dev.langchain4j.agent.tool.ToolSpecification;
 import dev.langchain4j.data.message.AiMessage;
@@ -14,15 +13,24 @@ import dev.langchain4j.model.chat.StreamingChatLanguageModel;
 import dev.langchain4j.model.input.structured.StructuredPrompt;
 import dev.langchain4j.model.moderation.Moderation;
 import dev.langchain4j.model.moderation.ModerationModel;
+import dev.langchain4j.model.output.TokenUsage;
 import dev.langchain4j.rag.DefaultRetrievalAugmentor;
 import dev.langchain4j.rag.RetrievalAugmentor;
+import dev.langchain4j.rag.content.Content;
 import dev.langchain4j.rag.content.retriever.ContentRetriever;
 import dev.langchain4j.rag.content.retriever.EmbeddingStoreContentRetriever;
 import dev.langchain4j.retriever.Retriever;
+import dev.langchain4j.service.tool.DefaultToolExecutor;
+import dev.langchain4j.service.tool.ToolExecutor;
+import dev.langchain4j.service.tool.ToolProvider;
 import dev.langchain4j.spi.services.AiServicesFactory;
 
 import java.lang.reflect.Method;
-import java.util.*;
+import java.util.ArrayList;
+import java.util.HashMap;
+import java.util.List;
+import java.util.Map;
+import java.util.Optional;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.Future;
@@ -32,12 +40,20 @@ import static dev.langchain4j.agent.tool.ToolSpecifications.toolSpecificationFro
 import static dev.langchain4j.exception.IllegalConfigurationException.illegalConfiguration;
 import static dev.langchain4j.internal.ValidationUtils.ensureNotNull;
 import static dev.langchain4j.spi.ServiceHelper.loadFactories;
+import static java.util.Arrays.asList;
 import static java.util.stream.Collectors.toList;
 
 /**
- * AI Services provide a simpler and more flexible alternative to chains.
+ * AI Services is a high-level API of LangChain4j to interact with {@link ChatLanguageModel} and {@link StreamingChatLanguageModel}.
+ * <p>
  * You can define your own API (a Java interface with one or more methods),
- * and {@code AiServices} will provide an implementation for it.
+ * and {@code AiServices} will provide an implementation for it, hiding all the complexity from you.
+ * <p>
+ * You can find more details <a href="https://docs.langchain4j.dev/tutorials/ai-services">here</a>.
+ * <p>
+ * Please note that AI Service should not be called concurrently for the same @{@link MemoryId},
+ * as it can lead to corrupted {@link ChatMemory}. Currently, AI Service does not implement any mechanism
+ * to prevent concurrent calls for the same @{@link MemoryId}.
  * <p>
  * Currently, AI Services support:
  * <pre>
@@ -48,7 +64,7 @@ import static java.util.stream.Collectors.toList;
  * - Single (shared) {@link ChatMemory}, configured via {@link #chatMemory(ChatMemory)}
  * - Separate (per-user) {@code ChatMemory}, configured via {@link #chatMemoryProvider(ChatMemoryProvider)} and a method parameter annotated with @{@link MemoryId}
  * - RAG, configured via {@link #contentRetriever(ContentRetriever)} or {@link #retrievalAugmentor(RetrievalAugmentor)}
- * - Tools, configured via {@link #tools(List)} or {@link #tools(Object...)} and methods annotated with @{@link Tool}
+ * - Tools, configured via {@link #tools(List)}, {@link #tools(Object...)}, {@link #tools(Map)} or {@link #toolProvider(ToolProvider)} and methods annotated with @{@link Tool}
  * - Various method return types (output parsers), see more details below
  * - Streaming (use {@link TokenStream} as a return type)
  * - Structured prompts as method arguments (see @{@link StructuredPrompt})
@@ -71,12 +87,13 @@ import static java.util.stream.Collectors.toList;
  *
  * <pre>
  * The return type of methods in your AI Service can be any of the following:
- * - a {@link String}, an {@link AiMessage} or a {@code Response<AiMessage>}, if you want to get the answer from the LLM as-is
+ * - a {@link String} or an {@link AiMessage}, if you want to get the answer from the LLM as-is
  * - a {@code List<String>} or {@code Set<String>}, if you want to receive the answer as a collection of items or bullet points
  * - any {@link Enum} or a {@code boolean}, if you want to use the LLM for classification
  * - a primitive or boxed Java type: {@code int}, {@code Double}, etc., if you want to use the LLM for data extraction
  * - many default Java types: {@code Date}, {@code LocalDateTime}, {@code BigDecimal}, etc., if you want to use the LLM for data extraction
  * - any custom POJO, if you want to use the LLM for data extraction.
+ * - Result&lt;T&gt; if you want to access {@link TokenUsage} or sources ({@link Content}s retrieved during RAG), aside from T, which can be of any type listed above. For example: Result&lt;String&gt;, Result&lt;MyCustomPojo&gt;
  * For POJOs, it is advisable to use the "json mode" feature if the LLM provider supports it. For OpenAI, this can be enabled by calling {@code responseFormat("json_object")} during model construction.
  *
  * </pre>
@@ -288,7 +305,6 @@ public abstract class AiServices<T> {
 
     /**
      * Configures the tools that the LLM can use.
-     * A {@link ChatMemory} that can hold at least 3 messages is required for the tools to work properly.
      *
      * @param objectsWithTools One or more objects whose methods are annotated with {@link Tool}.
      *                         All these tools (methods annotated with {@link Tool}) will be accessible to the LLM.
@@ -297,12 +313,14 @@ public abstract class AiServices<T> {
      * @see Tool
      */
     public AiServices<T> tools(Object... objectsWithTools) {
-        return tools(Arrays.asList(objectsWithTools));
+        if (context.toolProvider != null) {
+            throw new IllegalArgumentException("Either the tools or the tool provider can be configured, but not both!");
+        }
+        return tools(asList(objectsWithTools));
     }
 
     /**
      * Configures the tools that the LLM can use.
-     * A {@link ChatMemory} that can hold at least 3 messages is required for the tools to work properly.
      *
      * @param objectsWithTools A list of objects whose methods are annotated with {@link Tool}.
      *                         All these tools (methods annotated with {@link Tool}) are accessible to the LLM.
@@ -312,10 +330,19 @@ public abstract class AiServices<T> {
      */
     public AiServices<T> tools(List<Object> objectsWithTools) { // TODO Collection?
         // TODO validate uniqueness of tool names
-        context.toolSpecifications = new ArrayList<>();
-        context.toolExecutors = new HashMap<>();
+
+        if (context.toolSpecifications == null) {
+            context.toolSpecifications = new ArrayList<>();
+        }
+        if (context.toolExecutors == null) {
+            context.toolExecutors = new HashMap<>();
+        }
 
         for (Object objectWithTool : objectsWithTools) {
+            if (objectWithTool instanceof Class) {
+                throw illegalConfiguration("Tool '%s' must be an object, not a class", objectWithTool);
+            }
+
             for (Method method : objectWithTool.getClass().getDeclaredMethods()) {
                 if (method.isAnnotationPresent(Tool.class)) {
                     ToolSpecification toolSpecification = toolSpecificationFrom(method);
@@ -329,17 +356,58 @@ public abstract class AiServices<T> {
     }
 
     /**
-     * Deprecated. Use {@link #contentRetriever(ContentRetriever)}
+     * Configures the tool provider that the LLM can use
+     *
+     * @param toolProvider Decides which tools the LLM could use to handle the request
+     * @return builder
+     */
+    public AiServices<T> toolProvider(ToolProvider toolProvider) {
+        if (context.toolSpecifications != null | context.toolExecutors != null) {
+            throw new IllegalArgumentException("Either the tools or the tool provider can be configured, but not both!");
+        }
+        context.toolProvider = toolProvider;
+        return this;
+    }
+
+    /**
+     * Configures the tools that the LLM can use.
+     *
+     * @param tools A map of {@link ToolSpecification} to {@link ToolExecutor} entries.
+     *              This method of configuring tools is useful when tools must be configured programmatically.
+     *              Otherwise, it is recommended to use the {@link Tool}-annotated java methods
+     *              and configure tools with the {@link #tools(Object...)} and {@link #tools(List)} methods.
+     * @return builder
+     */
+    public AiServices<T> tools(Map<ToolSpecification, ToolExecutor> tools) {
+        if (context.toolProvider != null) {
+            throw new IllegalArgumentException("Either the tools or the tool provider can be configured, but not both!");
+        }
+        if (context.toolSpecifications == null) {
+            context.toolSpecifications = new ArrayList<>();
+        }
+        if (context.toolExecutors == null) {
+            context.toolExecutors = new HashMap<>();
+        }
+
+        tools.forEach((toolSpecification, toolExecutor) -> {
+            context.toolSpecifications.add(toolSpecification);
+            context.toolExecutors.put(toolSpecification.name(), toolExecutor);
+        });
+
+        return this;
+    }
+
+    /**
+     * @param retriever The retriever to be used by the AI Service.
+     * @return builder
+     * @deprecated Use {@link #contentRetriever(ContentRetriever)}
      * (e.g. {@link EmbeddingStoreContentRetriever}) instead.
      * <br>
      * Configures a retriever that will be invoked on every method call to fetch relevant information
      * related to the current user message from an underlying source (e.g., embedding store).
      * This relevant information is automatically injected into the message sent to the LLM.
-     *
-     * @param retriever The retriever to be used by the AI Service.
-     * @return builder
      */
-    @Deprecated
+    @Deprecated(forRemoval = true)
     public AiServices<T> retriever(Retriever<TextSegment> retriever) {
         if (contentRetrieverSet || retrievalAugmentorSet) {
             throw illegalConfiguration("Only one out of [retriever, contentRetriever, retrievalAugmentor] can be set");
